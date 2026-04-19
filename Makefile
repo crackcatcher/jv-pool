@@ -9,20 +9,29 @@ LIBS=
 LINKS=
 
 TARGET=jv_pool_main
-
+	
 TEST=jv_pool_test
 
-all:	
-	$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool.c -o jv_pool.o
-	$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool_main.c -o jv_pool_main.o
-	$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool_test.c -o jv_pool_test.o
+BENCH=jv_pool_bench
 	
-	$(CC) -o $(TARGET) jv_pool_main.o jv_pool.o $(LINKS) $(LIBS)
-	$(CC) -o $(TEST) jv_pool_test.o jv_pool.o $(LINKS) $(LIBS)
+all:	
+		$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool.c -o jv_pool.o
+		$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool_main.c -o jv_pool_main.o
+		$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool_test.c -o jv_pool_test.o
+		$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool_bench.c -o jv_pool_bench.o
+		
+		$(CC) -o $(TARGET) jv_pool_main.o jv_pool.o $(LINKS) $(LIBS)
+		$(CC) -o $(TEST) jv_pool_test.o jv_pool.o $(LINKS) $(LIBS)
+		$(CC) -o $(BENCH) jv_pool_bench.o jv_pool.o $(LINKS) $(LIBS)
+	
+		@echo 
+		@echo Project has been successfully compiled.
+		@echo
 
-	@echo 
-	@echo Project has been successfully compiled.
-	@echo
+bench:
+		$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool.c -o jv_pool.o
+		$(CC) $(CFLAGS) $(INCLUDES) -c jv_pool_bench.c -o jv_pool_bench.o
+		$(CC) -o $(BENCH) jv_pool_bench.o jv_pool.o $(LINKS) $(LIBS)
 
 clean:
-	rm -rf $(TARGET) $(TEST) *.depend *.layout bin obj *.o *.stackdump *.exe *.log *~
+		rm -rf $(TARGET) $(TEST) $(BENCH) *.depend *.layout bin obj *.o *.stackdump *.exe *.log *~

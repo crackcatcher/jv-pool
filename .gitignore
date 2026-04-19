@@ -9,6 +9,7 @@
 
 jv_pool_main
 jv_pool_test
+jv_pool_bench
 
 bin/
 obj/
