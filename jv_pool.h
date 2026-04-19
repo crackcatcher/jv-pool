@@ -13,6 +13,16 @@
 #define jv_memzero(buf, n) (void *) memset(buf, 0, n)
 #define jv_memset(buf, c, n) (void *) memset(buf, c, n)
 
+#ifndef JV_POOL_ENABLE_LOG
+#define JV_POOL_ENABLE_LOG 0
+#endif
+
+#if JV_POOL_ENABLE_LOG
+#define JV_POOL_LOG(...) printf(__VA_ARGS__)
+#else
+#define JV_POOL_LOG(...) ((void) 0)
+#endif
+
 #define jv_align(d, a) (((d) + (a - 1)) & ~(a - 1))
 
 typedef intptr_t jv_int_t;
@@ -37,13 +47,16 @@ typedef unsigned char u_char;
 typedef struct jv_pool_s jv_pool_t;
 typedef struct jv_block_s jv_block_t;
 typedef struct jv_lump_s jv_lump_t;
+typedef struct jv_pool_index_entry_s jv_pool_index_entry_t;
 
 struct jv_block_s {
   jv_block_t *next;
+  jv_pool_t *pool;
   size_t size;
 };
 
 struct jv_lump_s {
+  jv_block_t *block;
   jv_lump_t *prev;
   jv_lump_t *next;
   unsigned size : 31;
@@ -56,6 +69,10 @@ struct jv_pool_s {
   jv_lump_t *lump;
   jv_lump_t *idle; /* current idle lump's position */
   size_t size;     /* setting default block size */
+  size_t live_count;
+  size_t index_capacity;
+  size_t index_tombstones;
+  jv_pool_index_entry_t *index;
   uint32_t lump_count;
   unsigned block_count : 31;
   unsigned mode : 1; /* quick mode is 0, safe mode is 1, default is 1 */
@@ -70,6 +87,8 @@ struct jv_pool_s {
 jv_pool_t *jv_pool_create(size_t size, unsigned mode);
 
 void *jv_pool_alloc(jv_pool_t *pool, size_t size);
+
+void *jv_pool_alloc_nz(jv_pool_t *pool, size_t size);
 
 void *jv_pool_realloc(jv_pool_t *pool, void *ptr, size_t size);
 

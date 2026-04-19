@@ -15,7 +15,7 @@ It is suitable for workloads that:
 - aligned allocations based on `max_align_t`
 - automatic block growth when the current pool cannot satisfy a request
 - dedicated large-block allocation for requests larger than the default block
-- `alloc`, `realloc`, `free`, `recycle`, `exist`, `sizeof`, `reset`, `dump`
+- `alloc`, `alloc_nz`, `realloc`, `free`, `recycle`, `exist`, `sizeof`, `reset`, `dump`
 - frees fully-idle extra blocks on `jv_pool_free()`
 
 ## Files
@@ -114,6 +114,8 @@ validation behavior is effectively the same.
 - `jv_pool_exist()` and `jv_pool_sizeof()` only report live allocations.
   A pointer that has already been freed or recycled is treated as invalid.
 - `jv_pool_realloc()` preserves old contents up to `min(old_size, new_size)`.
+- `jv_pool_alloc_nz()` skips zero-fill and is the faster allocation path when
+  the caller is going to overwrite the buffer anyway.
 - If `jv_pool_realloc()` fails, the original pointer remains valid.
 - After a successful `jv_pool_realloc()`, the old pointer is invalid.
 - `jv_pool_recycle()` only marks a lump unused. It does not merge neighbors and
@@ -123,6 +125,8 @@ validation behavior is effectively the same.
 - The allocator is not thread-safe.
 - Any pointer obtained from the pool becomes invalid after `jv_pool_reset()` or
   `jv_pool_destroy()`.
+- Diagnostic logging is compiled out by default. Define `JV_POOL_ENABLE_LOG=1`
+  at compile time if you want the internal trace messages.
 
 ## API Reference
 
@@ -180,6 +184,20 @@ Returns:
 
 - new allocation pointer on success
 - `NULL` on failure
+
+### `void *jv_pool_alloc_nz(jv_pool_t *pool, size_t size);`
+
+Allocates `size` bytes from the pool without clearing the returned memory.
+
+Returns:
+
+- allocation pointer on success
+- `NULL` on failure
+
+Use this when:
+
+- the caller will immediately overwrite the full buffer
+- you want to avoid the zero-fill cost of `jv_pool_alloc()`
 
 ### `jv_int_t jv_pool_free(jv_pool_t *pool, void *ptr);`
 
@@ -308,6 +326,8 @@ jv_pool_each_block(pool, block, i) {
 
 - Use `JV_POOL_SAFE_MODE` as the default mode.
 - Prefer `jv_pool_free()` over `jv_pool_recycle()`.
+- Prefer `jv_pool_alloc_nz()` over `jv_pool_alloc()` when zero-fill is not
+  required.
 - Use `jv_pool_reset()` when a whole request/context ends and all allocations can
   be discarded together.
 - Do not pass pool pointers to the system `free()`.
@@ -317,7 +337,7 @@ jv_pool_each_block(pool, block, i) {
 ## Limitations
 
 - not thread-safe
-- prints diagnostic messages directly through `printf`
+- optional diagnostic messages use `printf` when `JV_POOL_ENABLE_LOG=1`
 - pool metadata fields use bit-fields, so the allocator is not intended for
   allocations larger than `JV_POOL_MAX_SIZE`
 

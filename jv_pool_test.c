@@ -341,7 +341,7 @@ void test8(void) {
 void test11(void) {
   jv_pool_t *pool;
   jv_pool_t *pool2;
-  char *a, *b, *c, *r;
+  char *a, *b, *c, *d, *r;
   void *huge;
 
   pool = jv_pool_create(128, JV_POOL_SAFE_MODE);
@@ -363,6 +363,21 @@ void test11(void) {
 
   assert(jv_pool_free(pool, a) == JV_OK);
   assert(jv_pool_free(pool, c) == JV_OK);
+  jv_pool_destroy(pool);
+
+  pool = jv_pool_create(128, JV_POOL_SAFE_MODE);
+  assert(pool != NULL);
+  a = jv_pool_alloc_nz(pool, 16);
+  b = jv_pool_alloc_nz(pool, 32);
+  d = jv_pool_alloc_nz(pool, 8);
+  assert(a != NULL && b != NULL && d != NULL);
+  assert(jv_pool_sizeof(pool, b) == 32);
+  assert(jv_pool_free(pool, a) == JV_OK);
+  r = jv_pool_realloc(pool, b, 40);
+  assert(r != NULL);
+  assert(jv_pool_sizeof(pool, r) >= jv_align(40, JV_WORD_SIZE / 8));
+  assert(jv_pool_free(pool, d) == JV_OK);
+  assert(jv_pool_free(pool, r) == JV_OK);
   jv_pool_destroy(pool);
 
   pool2 = jv_pool_create(1024 * 16, JV_POOL_SAFE_MODE);
