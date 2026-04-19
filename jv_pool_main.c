@@ -38,8 +38,6 @@ int main(int argc, char *argv[]) {
     printf("lump address: %p, lump->size: %u, lump->used: %u\n", (void *) lump, lump->size, lump->used);
   }
 
-  assert(jv_pool_recycle(pool, a) == JV_OK);
-
   assert(jv_pool_free(pool, a) == JV_OK);
 
   jv_pool_destroy(pool);

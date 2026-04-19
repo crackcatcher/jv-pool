@@ -1,26 +1,17 @@
 #ifndef _JV_POOL_H_INCLUDED_
 #define _JV_POOL_H_INCLUDED_
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef __x86_64__
-#define JV_WORD_SIZE 64
-#else
-#define JV_WORD_SIZE 32
-#endif
 
 #define JV_OK 0
 #define JV_ERROR -1
 
 #define jv_memzero(buf, n) (void *) memset(buf, 0, n)
 #define jv_memset(buf, c, n) (void *) memset(buf, c, n)
-
-#ifndef intptr_t
-#define intptr_t long
-#define uintptr_t unsigned long
-#endif
 
 #define jv_align(d, a) (((d) + (a - 1)) & ~(a - 1))
 
@@ -69,6 +60,12 @@ struct jv_pool_s {
   unsigned block_count : 31;
   unsigned mode : 1; /* quick mode is 0, safe mode is 1, default is 1 */
 };
+
+#define JV_POOL_ALIGNMENT ((size_t) _Alignof(max_align_t))
+#define JV_BLOCK_HEADER_SIZE jv_align(sizeof(jv_block_t), JV_POOL_ALIGNMENT)
+#define JV_POOL_HEADER_SIZE jv_align(sizeof(jv_pool_t), JV_POOL_ALIGNMENT)
+#define JV_LUMP_HEADER_SIZE jv_align(sizeof(jv_lump_t), JV_POOL_ALIGNMENT)
+#define JV_WORD_SIZE (JV_POOL_ALIGNMENT * 8)
 
 jv_pool_t *jv_pool_create(size_t size, unsigned mode);
 

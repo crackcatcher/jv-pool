@@ -20,7 +20,7 @@
         "**/**/*.o": true,
         "**/**/**/*.o": true,
         //"lib":true,
-        ".clang-format":true
+        ".clang-format": true
     },
     "search.exclude": {
         "node_module/": true,
@@ -32,19 +32,15 @@
     },
     "workbench.editor.enablePreview": false,
     "explorer.autoReveal": false,
-
-    "editor.tabSize":2,
+    "editor.tabSize": 2,
     "editor.insertSpaces": true,
     "editor.minimap.enabled": false,
     // Specifies the location of snippets in the suggestion widget
     "editor.snippetSuggestions": "top",
-    "editor.tabCompletion": true,
+    "editor.tabCompletion": "onlySnippets",
     // Controls whether format on paste is on or off
     "editor.formatOnPaste": true,
-
-    "files.associations": {
-
-    },
+    "files.associations": {},
     "window.title": "${dirty}${activeEditorLong}${separator}${rootName}${separator}${appName}",
     "C_Cpp.intelliSenseEngineFallback": "Enabled",
     //"C_Cpp.intelliSenseEngine": "Tag Parser",

@@ -6,11 +6,123 @@ static void *jv_pool_alloc_block(jv_pool_t *pool, size_t size);
 
 static void *jv_pool_alloc_huge(jv_pool_t *pool, size_t size);
 
+static jv_lump_t *jv_pool_find_lump(jv_pool_t *pool, void *ptr, unsigned require_used);
+
+static jv_lump_t *jv_pool_block_lump(jv_pool_t *pool, jv_block_t *block);
+
+static void *jv_pool_lump_to_ptr(jv_lump_t *lump);
+
+static jv_block_t *jv_pool_find_block(jv_pool_t *pool, jv_lump_t *lump);
+
+static void jv_pool_release_block(jv_pool_t *pool, jv_block_t *block, jv_lump_t *lump);
+
+static jv_lump_t *jv_pool_find_lump(jv_pool_t *pool, void *ptr, unsigned require_used) {
+  jv_lump_t *lump;
+
+  if (pool == NULL || ptr == NULL || pool->lump == NULL) {
+    return NULL;
+  }
+
+  lump = pool->lump;
+
+  do {
+    if (jv_pool_lump_to_ptr(lump) == ptr) {
+      if (require_used == 0 || lump->used == 1) {
+        return lump;
+      }
+      return NULL;
+    }
+
+    lump = lump->next;
+  } while (lump != pool->lump);
+
+  return NULL;
+}
+
+static jv_lump_t *jv_pool_block_lump(jv_pool_t *pool, jv_block_t *block) {
+  size_t offset;
+
+  offset = JV_BLOCK_HEADER_SIZE;
+  if (block == pool->first) {
+    offset += JV_POOL_HEADER_SIZE;
+  }
+
+  return (jv_lump_t *) ((u_char *) block + offset);
+}
+
+static void *jv_pool_lump_to_ptr(jv_lump_t *lump) {
+  return (void *) ((u_char *) lump + JV_LUMP_HEADER_SIZE);
+}
+
+static jv_block_t *jv_pool_find_block(jv_pool_t *pool, jv_lump_t *lump) {
+  jv_block_t *block;
+
+  if (pool == NULL || lump == NULL) {
+    return NULL;
+  }
+
+  for (block = pool->first; block != NULL; block = block->next) {
+    u_char *start;
+    u_char *end;
+
+    start = (u_char *) jv_pool_block_lump(pool, block);
+    end = start + JV_LUMP_HEADER_SIZE + block->size;
+
+    if ((u_char *) lump >= start && (u_char *) lump < end) {
+      return block;
+    }
+  }
+
+  return NULL;
+}
+
+static void jv_pool_release_block(jv_pool_t *pool, jv_block_t *block, jv_lump_t *lump) {
+  jv_block_t *prev;
+  jv_block_t *curr;
+
+  if (pool == NULL || block == NULL || lump == NULL || block == pool->first) {
+    return;
+  }
+
+  if (pool->lump == lump) {
+    pool->lump = jv_pool_block_lump(pool, pool->first);
+  }
+
+  if (pool->idle == lump) {
+    pool->idle = jv_pool_block_lump(pool, pool->first);
+  }
+
+  lump->prev->next = lump->next;
+  lump->next->prev = lump->prev;
+
+  pool->lump_count--;
+
+  prev = NULL;
+  for (curr = pool->first; curr != NULL && curr != block; curr = curr->next) {
+    prev = curr;
+  }
+
+  if (curr == NULL || prev == NULL) {
+    return;
+  }
+
+  prev->next = curr->next;
+
+  if (pool->last == curr) {
+    pool->last = prev;
+  }
+
+  pool->block_count--;
+
+  free(curr);
+}
+
 jv_pool_t *jv_pool_create(size_t size, unsigned mode) {
   jv_pool_t *pool;
   jv_block_t *block;
   jv_lump_t *lump;
   u_char *cp;
+  size_t total_size;
 
   if (size < JV_POOL_MIN_SIZE) {
     size = JV_POOL_DEFAULT_SIZE;
@@ -23,15 +135,17 @@ jv_pool_t *jv_pool_create(size_t size, unsigned mode) {
 
   size = jv_align(size, JV_WORD_SIZE / 8);
 
-  cp = malloc(size + sizeof(jv_block_t) + sizeof(jv_pool_t) + sizeof(jv_lump_t));
+  total_size = JV_BLOCK_HEADER_SIZE + JV_POOL_HEADER_SIZE + JV_LUMP_HEADER_SIZE + size;
+
+  cp = malloc(total_size);
   if (cp == NULL) {
     printf("jv_pool_create() failed, alloc size is %lu\n", size);
     return (jv_pool_t *) NULL;
   }
 
   block = (jv_block_t *) cp;
-  pool = (jv_pool_t *) (cp + sizeof(jv_block_t));
-  lump = (jv_lump_t *) (cp + sizeof(jv_block_t) + sizeof(jv_pool_t));
+  pool = (jv_pool_t *) (cp + JV_BLOCK_HEADER_SIZE);
+  lump = (jv_lump_t *) (cp + JV_BLOCK_HEADER_SIZE + JV_POOL_HEADER_SIZE);
 
   block->size = size;
   block->next = NULL;
@@ -53,20 +167,24 @@ jv_pool_t *jv_pool_create(size_t size, unsigned mode) {
 }
 
 static void *jv_pool_slb(jv_pool_t *pool, size_t size) {
+  if (pool == NULL) {
+    return NULL;
+  }
+
   if (size <= pool->size) {
     jv_lump_t *p;
 
     p = pool->idle;
     do {
       if (p->used == 0 && p->size <= pool->size && p->size >= size) { /* first fit */
-        if (p->size <= size + 2 * sizeof(jv_lump_t)) {                /* fit  */
+        if (p->size <= size + 2 * JV_LUMP_HEADER_SIZE) {              /* fit  */
           p->used = 1;
           printf("alloc memory in lump using fit, size is: %u\n", p->size);
-          return (void *) (p + 1);
+          return jv_pool_lump_to_ptr(p);
         } else { /* best fit */
           jv_lump_t *lump;
 
-          lump = (jv_lump_t *) ((u_char *) p + p->size - size);
+          lump = (jv_lump_t *) ((u_char *) p + JV_LUMP_HEADER_SIZE + p->size - JV_LUMP_HEADER_SIZE - size);
           lump->size = size;
 
           lump->used = 1;
@@ -76,12 +194,12 @@ static void *jv_pool_slb(jv_pool_t *pool, size_t size) {
           lump->next->prev = lump;
           lump->prev = p;
 
-          p->size -= size + sizeof(jv_lump_t);
+          p->size -= size + JV_LUMP_HEADER_SIZE;
 
           pool->lump_count++;
 
           printf("alloc memory in lump using best fit, size is: %u\n", lump->size);
-          return (void *) (lump + 1);
+          return jv_pool_lump_to_ptr(lump);
         }
       }
       p = p->next;
@@ -94,12 +212,12 @@ static void *jv_pool_slb(jv_pool_t *pool, size_t size) {
 
     for (block = pool->first; block != NULL; block = block->next) {
       if (block->size >= size) {
-        lump = (jv_lump_t *) ((u_char *) block + sizeof(jv_block_t));
+        lump = jv_pool_block_lump(pool, block);
         if (lump->used == 0 && (jv_uint_t)(size * 1.25 / lump->size) == 1) { /* alloc block fit */
           lump->size = block->size;
           lump->used = 1;
           printf("alloc memory in block using fit, size is: %u\n", lump->size);
-          return (void *) (lump + 1);
+          return jv_pool_lump_to_ptr(lump);
         }
       }
     }
@@ -111,7 +229,11 @@ static void *jv_pool_slb(jv_pool_t *pool, size_t size) {
 void *jv_pool_alloc(jv_pool_t *pool, size_t size) {
   void *v;
 
-  if (size <= 0) {
+  if (pool == NULL) {
+    return NULL;
+  }
+
+  if (size == 0) {
     printf("alloc memory must be greater than zero\n");
     return NULL;
   }
@@ -133,11 +255,10 @@ void *jv_pool_alloc(jv_pool_t *pool, size_t size) {
 size_t jv_pool_sizeof(jv_pool_t *pool, void *ptr) {
   jv_lump_t *lump;
 
-  if (jv_pool_exist(pool, ptr) == JV_ERROR) {
+  lump = jv_pool_find_lump(pool, ptr, 1);
+  if (lump == NULL) {
     return 0;
   }
-
-  lump = (jv_lump_t *) ((u_char *) ptr - sizeof(jv_lump_t));
 
   if (lump->size % (JV_WORD_SIZE / 8) != 0) {
     return 0;
@@ -148,42 +269,54 @@ size_t jv_pool_sizeof(jv_pool_t *pool, void *ptr) {
 
 jv_int_t jv_pool_exist(jv_pool_t *pool, void *ptr) {
   jv_lump_t *lump;
-  size_t l;
 
-  if (pool == NULL || ptr == NULL) {
-    return JV_ERROR;
-  }
-
-  l = sizeof(jv_lump_t);
-
-  if (pool->mode == JV_POOL_QUICK_MODE) {
-    lump = (jv_lump_t *) ((u_char *) ptr - l);
-
-    if (lump->size % (JV_WORD_SIZE / 8) != 0) {
-      printf("ptr not exist in memroy pool, %u\n", lump->size);
-      return JV_ERROR;
-    }
-
+  lump = jv_pool_find_lump(pool, ptr, 1);
+  if (lump != NULL) {
     return JV_OK;
-  } else {
-    lump = pool->lump;
-
-    do {
-      if ((u_char *) lump + l == (u_char *) ptr /*&& lump->size % (JV_WORD_SIZE / 8) != 0*/) {
-        return JV_OK;
-      }
-      lump = lump->next;
-    } while (lump != pool->lump);
-
-    printf("ptr not exist in memroy pool\n");
-    return JV_ERROR;
   }
+
+  printf("ptr not exist in memroy pool\n");
+  return JV_ERROR;
 }
 
 void *jv_pool_realloc(jv_pool_t *pool, void *ptr, size_t size) {
-  if (jv_pool_free(pool, ptr) == JV_OK) {
+  void *new_ptr;
+  size_t copy_size;
+
+  if (pool == NULL) {
+    return NULL;
+  }
+
+  if (ptr == NULL) {
     return jv_pool_alloc(pool, size);
   }
+
+  if (size == 0) {
+    (void) jv_pool_free(pool, ptr);
+    return NULL;
+  }
+
+  copy_size = jv_pool_sizeof(pool, ptr);
+  if (copy_size == 0) {
+    return NULL;
+  }
+
+  new_ptr = jv_pool_alloc(pool, size);
+  if (new_ptr == NULL) {
+    return NULL;
+  }
+
+  if (copy_size > size) {
+    copy_size = size;
+  }
+
+  memcpy(new_ptr, ptr, copy_size);
+
+  if (jv_pool_free(pool, ptr) == JV_OK) {
+    return new_ptr;
+  }
+
+  (void) jv_pool_free(pool, new_ptr);
   return NULL;
 }
 
@@ -192,7 +325,7 @@ static void *jv_pool_alloc_block(jv_pool_t *pool, size_t size) {
   jv_lump_t *tail;
   u_char *cp;
 
-  cp = malloc(pool->size + sizeof(jv_block_t) + sizeof(jv_lump_t));
+  cp = malloc(pool->size + JV_BLOCK_HEADER_SIZE + JV_LUMP_HEADER_SIZE);
   if (cp == NULL) {
     printf("alloc block memory failed, alloc size is %lu\n", (jv_uint_t) pool->size);
     return NULL;
@@ -210,9 +343,9 @@ static void *jv_pool_alloc_block(jv_pool_t *pool, size_t size) {
 
   tail = pool->lump->prev;
 
-  if (size > pool->size - 2 * sizeof(jv_lump_t)) {
+  if (size > pool->size - 2 * JV_LUMP_HEADER_SIZE) {
     jv_lump_t *lump;
-    lump = (jv_lump_t *) (cp + sizeof(jv_block_t));
+    lump = (jv_lump_t *) (cp + JV_BLOCK_HEADER_SIZE);
     lump->size = pool->size;
     lump->used = 1;
 
@@ -226,14 +359,14 @@ static void *jv_pool_alloc_block(jv_pool_t *pool, size_t size) {
 
     printf("alloc a new block with only one lump, alloc all free memory of ths block to applicant\n");
 
-    return (void *) (lump + 1);
+    return jv_pool_lump_to_ptr(lump);
   } else {
     jv_lump_t *free, *alloc;
-    free = (jv_lump_t *) (cp + sizeof(jv_block_t));
-    free->size = pool->size - size - sizeof(jv_lump_t);
+    free = (jv_lump_t *) (cp + JV_BLOCK_HEADER_SIZE);
+    free->size = pool->size - size - JV_LUMP_HEADER_SIZE;
     free->used = 0;
 
-    alloc = (jv_lump_t *) ((u_char *) free + sizeof(jv_lump_t) + free->size);
+    alloc = (jv_lump_t *) ((u_char *) free + JV_LUMP_HEADER_SIZE + free->size);
     alloc->size = size;
     alloc->used = 1;
 
@@ -249,7 +382,7 @@ static void *jv_pool_alloc_block(jv_pool_t *pool, size_t size) {
     pool->lump_count++;
 
     printf("alloc a new block with two lumps, first lump reserved for new block, last one lump alloc to applicant\n");
-    return (void *) (alloc + 1);
+    return jv_pool_lump_to_ptr(alloc);
   }
 }
 
@@ -258,7 +391,7 @@ static void *jv_pool_alloc_huge(jv_pool_t *pool, size_t size) {
   jv_lump_t *tail, *lump;
   u_char *cp;
 
-  cp = malloc(size + sizeof(jv_block_t) + sizeof(jv_lump_t));
+  cp = malloc(size + JV_BLOCK_HEADER_SIZE + JV_LUMP_HEADER_SIZE);
   if (cp == NULL) {
     printf("alloc huge memory failed, alloc size is %lu\n", (jv_uint_t) size);
     return NULL;
@@ -275,7 +408,7 @@ static void *jv_pool_alloc_huge(jv_pool_t *pool, size_t size) {
 
   tail = pool->lump->prev;
 
-  lump = (jv_lump_t *) (cp + sizeof(jv_block_t));
+  lump = (jv_lump_t *) (cp + JV_BLOCK_HEADER_SIZE);
   lump->size = size;
   lump->used = 1;
 
@@ -288,19 +421,19 @@ static void *jv_pool_alloc_huge(jv_pool_t *pool, size_t size) {
   pool->idle = lump;
 
   printf("alloc a new huge block with only one lump, alloc all free memory of ths huge block to applicant\n");
-  return (void *) (lump + 1);
+  return jv_pool_lump_to_ptr(lump);
 }
 
 jv_int_t jv_pool_free(jv_pool_t *pool, void *ptr) {
   jv_lump_t *prior, *idle;
+  jv_block_t *block;
 
-  if (jv_pool_exist(pool, ptr) == JV_ERROR) {
+  idle = jv_pool_find_lump(pool, ptr, 1);
+  if (idle == NULL) {
     return JV_ERROR;
   }
 
-  idle = (jv_lump_t *) ((u_char *) ptr - sizeof(jv_lump_t));
-
-  if (/*idle->used != 1 &&*/ idle->size % (JV_WORD_SIZE / 8) != 0) {
+  if (idle->size % (JV_WORD_SIZE / 8) != 0) {
     printf("free's pointer is not in the memory pool\n");
     return JV_ERROR;
   }
@@ -308,9 +441,9 @@ jv_int_t jv_pool_free(jv_pool_t *pool, void *ptr) {
   idle->used = 0;
   pool->idle = idle;
 
-  if ((u_char *) idle + sizeof(jv_lump_t) + idle->size == (u_char *) idle->next) { /* nearby the next lump */
+  if ((u_char *) idle + JV_LUMP_HEADER_SIZE + idle->size == (u_char *) idle->next) { /* nearby the next lump */
     if (idle->next->used == 0) {                                                   /* next lump is free，then merge */
-      idle->size = idle->size + sizeof(jv_lump_t) + idle->next->size;
+      idle->size = idle->size + JV_LUMP_HEADER_SIZE + idle->next->size;
       idle->next = idle->next->next;
       idle->next->prev = idle;
       pool->idle = idle;
@@ -320,14 +453,20 @@ jv_int_t jv_pool_free(jv_pool_t *pool, void *ptr) {
 
   prior = idle->prev;
 
-  if ((u_char *) prior + sizeof(jv_lump_t) + prior->size == (u_char *) idle) { /* nearby the previous lump*/
+  if ((u_char *) prior + JV_LUMP_HEADER_SIZE + prior->size == (u_char *) idle) { /* nearby the previous lump*/
     if (prior->used == 0) {                                                    /*  previous lump is free，then merge */
-      prior->size = prior->size + sizeof(jv_lump_t) + idle->size;
+      prior->size = prior->size + JV_LUMP_HEADER_SIZE + idle->size;
       prior->next = prior->next->next;
       prior->next->prev = prior;
-      pool->idle = prior;
+      idle = prior;
+      pool->idle = idle;
       pool->lump_count--;
     }
+  }
+
+  block = jv_pool_find_block(pool, idle);
+  if (block != NULL && block != pool->first && idle == jv_pool_block_lump(pool, block) && idle->size == block->size) {
+    jv_pool_release_block(pool, block, idle);
   }
 
   return JV_OK;
@@ -336,11 +475,10 @@ jv_int_t jv_pool_free(jv_pool_t *pool, void *ptr) {
 jv_int_t jv_pool_recycle(jv_pool_t *pool, void *ptr) {
   jv_lump_t *lump;
 
-  if (jv_pool_exist(pool, ptr) == JV_ERROR) {
+  lump = jv_pool_find_lump(pool, ptr, 1);
+  if (lump == NULL) {
     return JV_ERROR;
   }
-
-  lump = (jv_lump_t *) ((u_char *) ptr - sizeof(jv_lump_t));
 
   if (lump->size % (JV_WORD_SIZE / 8) != 0) {
     return JV_ERROR;
@@ -355,11 +493,11 @@ jv_int_t jv_pool_reset(jv_pool_t *pool) {
   jv_block_t *first, *block, *tmp = NULL;
   jv_lump_t *lump;
 
-  first = pool->first;
-
   if (pool == NULL) {
     return JV_ERROR;
   }
+
+  first = pool->first;
 
   lump = pool->lump;
   lump->size = pool->size;
@@ -376,7 +514,7 @@ jv_int_t jv_pool_reset(jv_pool_t *pool) {
   block->next = NULL;
 
   pool->first = pool->last = block;
-  pool->idle = lump;
+  pool->lump = pool->idle = jv_pool_block_lump(pool, block);
   pool->block_count = 1;
   pool->lump_count = 1;
 
@@ -385,6 +523,10 @@ jv_int_t jv_pool_reset(jv_pool_t *pool) {
 
 void jv_pool_destroy(jv_pool_t *pool) {
   jv_block_t *block, *tmp = NULL;
+
+  if (pool == NULL) {
+    return;
+  }
 
   printf("destory a memory pool, size is %lu\n", (jv_uint_t) pool->size);
 
